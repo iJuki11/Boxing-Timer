@@ -109,12 +109,6 @@
   #start, #pause { background: var(--btn-strong); color: #15171a; }
   button:active { transform: scale(.97); }
   [hidden] { display: none !important; }
-  #note {
-    font-size: 13px;
-    color: var(--muted);
-    max-width: 520px;
-    margin: 0;
-  }
 </style>
 </head>
 <body data-phase="idle">
@@ -135,8 +129,6 @@
     <button id="pause" hidden>Pauza</button>
     <button id="reset">Reset</button>
   </div>
-
-  <p id="note">Mobitel ne smije biti na tihom načinu rada, inače se beepovi neće čuti.</p>
 </main>
 
 <script>
@@ -194,7 +186,7 @@
     src.start(0);
   }
 
-  function tone(freq, dur, at, vol = 0.35) {
+  function tone(freq, dur, at, vol = 0.9) {
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = 'square';
@@ -218,7 +210,7 @@
         tone(880, 0.13, t);
         break;
       case 'start':   // početak runde: dugi visoki ton
-        tone(1400, 0.9, t, 0.4);
+        tone(1400, 0.9, t, 0.95);
         break;
       case 'minute':  // prošla minuta
         tone(1000, 0.2, t);
@@ -228,9 +220,9 @@
         tone(1600, 0.1, t + 0.2);
         break;
       case 'end':     // kraj runde: tri niža
-        tone(750, 0.3, t, 0.4);
-        tone(750, 0.3, t + 0.45, 0.4);
-        tone(750, 0.3, t + 0.9, 0.4);
+        tone(750, 0.3, t, 0.95);
+        tone(750, 0.3, t + 0.45, 0.95);
+        tone(750, 0.3, t + 0.9, 0.95);
         break;
     }
   }
