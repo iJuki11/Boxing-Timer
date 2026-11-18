@@ -1,0 +1,423 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Boks timer">
+<meta name="theme-color" content="#15171a">
+<title>Boks timer</title>
+<style>
+  :root {
+    --bg: #15171a;
+    --fg: #f4f4f4;
+    --muted: rgba(255,255,255,.65);
+    --btn: rgba(255,255,255,.14);
+    --btn-strong: #f4f4f4;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    transition: background-color .35s ease;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body[data-phase="prep"]  { --bg: #8a6400; }
+  body[data-phase="round"] { --bg: #a3221b; }
+  body[data-phase="rest"]  { --bg: #1d6b40; }
+  body.paused { --bg: #3a3d42; }
+
+  main {
+    min-height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+    text-align: center;
+  }
+  #label {
+    font-size: clamp(22px, 6vw, 40px);
+    font-weight: 800;
+    letter-spacing: .08em;
+  }
+  #sub {
+    font-size: clamp(15px, 4vw, 22px);
+    color: var(--muted);
+    min-height: 1.3em;
+  }
+  #time {
+    font-size: clamp(96px, 34vw, 260px);
+    font-weight: 800;
+    line-height: 1;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -.02em;
+  }
+  .bar {
+    width: min(520px, 90vw);
+    height: 10px;
+    border-radius: 5px;
+    background: rgba(255,255,255,.18);
+    overflow: hidden;
+  }
+  #fill {
+    height: 100%;
+    width: 0;
+    background: var(--fg);
+  }
+  #rounds-ctl {
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    font-size: 22px;
+  }
+  #rounds-ctl b { font-size: 34px; font-variant-numeric: tabular-nums; }
+  #rounds-ctl button {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    font-size: 30px;
+    line-height: 1;
+    padding: 0;
+  }
+  #rounds-ctl.locked { opacity: .35; pointer-events: none; }
+  .btns {
+    display: flex;
+    gap: 12px;
+    width: min(520px, 90vw);
+  }
+  button {
+    font: inherit;
+    border: 0;
+    border-radius: 14px;
+    background: var(--btn);
+    color: var(--fg);
+    cursor: pointer;
+  }
+  .btns button {
+    flex: 1;
+    height: 64px;
+    font-size: 22px;
+    font-weight: 700;
+  }
+  #start, #pause { background: var(--btn-strong); color: #15171a; }
+  button:active { transform: scale(.97); }
+  [hidden] { display: none !important; }
+  #note {
+    font-size: 13px;
+    color: var(--muted);
+    max-width: 520px;
+    margin: 0;
+  }
+</style>
+</head>
+<body data-phase="idle">
+<main>
+  <div id="label">SPREMAN</div>
+  <div id="sub"></div>
+  <div id="time">3:00</div>
+  <div class="bar"><div id="fill"></div></div>
+
+  <div id="rounds-ctl">
+    <button id="minus" aria-label="Manje rundi">−</button>
+    <span><b id="rcount">6</b> rundi</span>
+    <button id="plus" aria-label="Više rundi">+</button>
+  </div>
+
+  <div class="btns">
+    <button id="start">Start</button>
+    <button id="pause" hidden>Pauza</button>
+    <button id="reset">Reset</button>
+  </div>
+
+  <p id="note">Mobitel ne smije biti na tihom načinu rada, inače se beepovi neće čuti.</p>
+</main>
+
+<script>
+(() => {
+  // Trajanja u sekundama
+  const ROUND = 180;
+  const REST = 60;
+  const PREP = 5;
+  const MIN_ROUNDS = 1;
+  const MAX_ROUNDS = 20;
+
+  // Zvuk se miješa s glazbom iz drugih aplikacija (npr. YouTube Music)
+  // umjesto da je zaustavi. Podržano u Safariju 16.4+.
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = 'ambient';
+  } catch (e) {}
+
+  const $ = id => document.getElementById(id);
+  const el = {
+    body: document.body,
+    label: $('label'), sub: $('sub'), time: $('time'), fill: $('fill'),
+    ctl: $('rounds-ctl'), rcount: $('rcount'),
+    minus: $('minus'), plus: $('plus'),
+    start: $('start'), pause: $('pause'), reset: $('reset'),
+  };
+
+  let rounds = 6;
+  try {
+    const saved = parseInt(localStorage.getItem('boks-rundi'), 10);
+    if (saved >= MIN_ROUNDS && saved <= MAX_ROUNDS) rounds = saved;
+  } catch (e) {}
+
+  let phases = [];
+  let pi = 0;
+  let phaseStart = 0;
+  let running = false;
+  let paused = false;
+  let pauseElapsed = 0;
+  let timer = null;
+  let ctx = null;
+  let wakeLock = null;
+
+  // ---------- Zvuk ----------
+  function ensureAudio() {
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      ctx = new AC();
+    }
+    if (ctx.state !== 'running') ctx.resume();
+    // Prazan zvuk koji na iPhoneu "otključa" audio nakon dodira
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
+  }
+
+  function tone(freq, dur, at, vol = 0.35) {
+    const osc = ctx.createOscillator();
+    const g = ctx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    g.gain.setValueAtTime(0, at);
+    g.gain.linearRampToValueAtTime(vol, at + 0.005);
+    g.gain.setValueAtTime(vol, at + Math.max(0.01, dur - 0.02));
+    g.gain.linearRampToValueAtTime(0, at + dur);
+    osc.connect(g);
+    g.connect(ctx.destination);
+    osc.start(at);
+    osc.stop(at + dur + 0.02);
+  }
+
+  function play(kind) {
+    if (!ctx) return;
+    if (ctx.state !== 'running') ctx.resume();
+    const t = ctx.currentTime + 0.01;
+    switch (kind) {
+      case 'count':   // odbrojavanje zadnjih 5 sekundi odmora
+        tone(880, 0.13, t);
+        break;
+      case 'start':   // početak runde: dugi visoki ton
+        tone(1400, 0.9, t, 0.4);
+        break;
+      case 'minute':  // prošla minuta
+        tone(1000, 0.2, t);
+        break;
+      case 'thirty':  // 30 sekundi do kraja: dva brza
+        tone(1600, 0.1, t);
+        tone(1600, 0.1, t + 0.2);
+        break;
+      case 'end':     // kraj runde: tri niža
+        tone(750, 0.3, t, 0.4);
+        tone(750, 0.3, t + 0.45, 0.4);
+        tone(750, 0.3, t + 0.9, 0.4);
+        break;
+    }
+  }
+
+  // ---------- Ekran ostaje upaljen ----------
+  async function requestWake() {
+    try {
+      if ('wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (e) {}
+  }
+  function releaseWake() {
+    try { if (wakeLock) wakeLock.release(); } catch (e) {}
+    wakeLock = null;
+  }
+
+  // ---------- Raspored ----------
+  function buildPhases(n) {
+    const list = [{
+      type: 'prep', dur: PREP,
+      ev: [[0, 'count'], [1, 'count'], [2, 'count'], [3, 'count'], [4, 'count']],
+    }];
+    for (let i = 1; i <= n; i++) {
+      list.push({
+        type: 'round', n: i, dur: ROUND,
+        ev: [[0, 'start'], [60, 'minute'], [120, 'minute'], [150, 'thirty'], [180, 'end']],
+      });
+      if (i < n) {
+        list.push({
+          type: 'rest', n: i, dur: REST,
+          ev: [[55, 'count'], [56, 'count'], [57, 'count'], [58, 'count'], [59, 'count']],
+        });
+      }
+    }
+    list.forEach(p => { p.fired = new Set(); });
+    return list;
+  }
+
+  function fmt(sec) {
+    const s = Math.ceil(sec - 1e-6);
+    const m = Math.floor(s / 60);
+    return m + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function tick() {
+    if (!running || paused) return;
+    const now = performance.now();
+    while (true) {
+      const ph = phases[pi];
+      const t = (now - phaseStart) / 1000;
+      ph.ev.forEach((e, k) => {
+        if (!ph.fired.has(k) && t >= e[0]) {
+          ph.fired.add(k);
+          // Ako je stranica bila uspavana, ne pucaj stare beepove odjednom
+          if (t - e[0] < 1.5) play(e[1]);
+        }
+      });
+      if (t >= ph.dur) {
+        phaseStart += ph.dur * 1000;
+        pi++;
+        if (pi >= phases.length) { finish(); return; }
+        continue;
+      }
+      render(ph, t);
+      break;
+    }
+  }
+
+  function render(ph, t) {
+    el.body.dataset.phase = ph.type;
+    if (ph.type === 'prep') {
+      el.label.textContent = 'PRIPREMI SE';
+      el.sub.textContent = 'Runda 1 / ' + rounds;
+    } else if (ph.type === 'round') {
+      el.label.textContent = 'RUNDA ' + ph.n + ' / ' + rounds;
+      el.sub.textContent = '';
+    } else {
+      el.label.textContent = 'ODMOR';
+      el.sub.textContent = 'Sljedeća: runda ' + (ph.n + 1) + ' / ' + rounds;
+    }
+    el.time.textContent = fmt(Math.max(0, ph.dur - t));
+    el.fill.style.width = Math.min(100, (t / ph.dur) * 100) + '%';
+  }
+
+  function showIdle() {
+    el.body.dataset.phase = 'idle';
+    el.body.classList.remove('paused');
+    el.label.textContent = 'SPREMAN';
+    const total = rounds * 3 + (rounds - 1);
+    el.sub.textContent = rounds + ' × 3:00, odmor 1:00 · ukupno ' + total + ' min';
+    el.time.textContent = '3:00';
+    el.fill.style.width = '0%';
+    el.rcount.textContent = rounds;
+  }
+
+  function setButtons() {
+    el.start.hidden = running;
+    el.pause.hidden = !running;
+    el.pause.textContent = paused ? 'Nastavi' : 'Pauza';
+    el.ctl.classList.toggle('locked', running);
+  }
+
+  // ---------- Akcije ----------
+  function start() {
+    ensureAudio();
+    phases = buildPhases(rounds);
+    pi = 0;
+    phaseStart = performance.now();
+    running = true;
+    paused = false;
+    el.start.textContent = 'Start';
+    clearInterval(timer);
+    timer = setInterval(tick, 50);
+    tick();
+    requestWake();
+    setButtons();
+  }
+
+  function togglePause() {
+    if (!running) return;
+    if (!paused) {
+      paused = true;
+      pauseElapsed = performance.now() - phaseStart;
+      el.body.classList.add('paused');
+      el.label.textContent = 'PAUZA';
+    } else {
+      ensureAudio();
+      phaseStart = performance.now() - pauseElapsed;
+      paused = false;
+      el.body.classList.remove('paused');
+      requestWake();
+      tick();
+    }
+    setButtons();
+  }
+
+  function finish() {
+    running = false;
+    paused = false;
+    clearInterval(timer);
+    releaseWake();
+    el.body.dataset.phase = 'idle';
+    el.label.textContent = 'GOTOVO';
+    el.sub.textContent = rounds + (rounds === 1 ? ' runda' : ' rundi') + ' odrađeno';
+    el.time.textContent = '0:00';
+    el.fill.style.width = '100%';
+    el.start.textContent = 'Ponovno';
+    setButtons();
+  }
+
+  function reset() {
+    running = false;
+    paused = false;
+    clearInterval(timer);
+    releaseWake();
+    el.start.textContent = 'Start';
+    showIdle();
+    setButtons();
+  }
+
+  function changeRounds(d) {
+    if (running) return;
+    rounds = Math.min(MAX_ROUNDS, Math.max(MIN_ROUNDS, rounds + d));
+    try { localStorage.setItem('boks-rundi', rounds); } catch (e) {}
+    el.start.textContent = 'Start';
+    showIdle();
+  }
+
+  el.start.addEventListener('click', start);
+  el.pause.addEventListener('click', togglePause);
+  el.reset.addEventListener('click', reset);
+  el.minus.addEventListener('click', () => changeRounds(-1));
+  el.plus.addEventListener('click', () => changeRounds(1));
+
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && running && !paused) {
+      if (ctx && ctx.state !== 'running') ctx.resume();
+      requestWake();
+      tick();
+    }
+  });
+
+  showIdle();
+  setButtons();
+})();
+</script>
+</body>
+</html>
