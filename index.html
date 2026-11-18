@@ -109,6 +109,12 @@
   #start, #pause { background: var(--btn-strong); color: #15171a; }
   button:active { transform: scale(.97); }
   [hidden] { display: none !important; }
+  #note {
+    font-size: 50px;
+    color: var(--muted);
+    max-width: 520px;
+    margin: 0;
+  }
 </style>
 </head>
 <body data-phase="idle">
@@ -129,6 +135,8 @@
     <button id="pause" hidden>Pauza</button>
     <button id="reset">Reset</button>
   </div>
+
+  <p id="note">Robi je stara pederčina</p>
 </main>
 
 <script>
